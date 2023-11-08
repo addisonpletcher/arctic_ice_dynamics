@@ -1,0 +1,214 @@
+---
+title: "R Notebook"
+output: html_notebook
+editor_options: 
+  chunk_output_type: console
+---
+# Preliminary
+```{r} 
+# PACKAGE INSTALL
+install.packages("dplyr")
+install.packages("readr")
+install.packages("vroom")
+install.packages("purrr")
+install.packages("stringr")
+install.packages("ggplot2")
+install.packages("googledrive")
+
+# IMPORT LIBRARIES
+#library(dplyr)
+#library(readr)
+library(vroom)
+#library(purrr)
+library(stringr)
+#library(ggplot2)
+library(tidyverse)
+#library(googledrive)
+``` 
+
+```{r}
+# DESIGNATING
+
+#Gdrive
+setwd("G:/My Drive/YKD_water")
+
+#desktop
+#setwd("C:/Users/apletch2/Dropbox (University of Oregon)/Research")
+
+#laptop
+#setwd("C:/Users/addyp/Dropbox (University of Oregon)/Research")
+
+# Making list of csvs
+files <- list.files('raw_csvs', full.names = FALSE)
+```
+
+# CSV Manipulation
+```{r}
+#Gdrive
+setwd("G:/My Drive/YKD_water/raw_csvs")
+
+# FUNCTION (merging files on ID + adding date column based on filename)
+download_data <- function(files){
+  
+  temp <- read_csv(paste0(files)) %>% 
+    as_tibble() %>% 
+    mutate("date" = str_sub(files, 9, 18)) #alter numbers here based on file name change 
+  
+  return(temp)
+  
+}
+```
+
+```{r}
+#Gdrive
+setwd("G:/My Drive/YKD_water/raw_csvs")
+
+# APPLY function
+data <- files %>% 
+  map(download_data) %>% 
+  reduce(bind_rows)
+
+#add totalArea as column (based on maximum cloudArea)
+data <- data %>% 
+  group_by(Lake_ID) %>%
+  mutate(totalArea = max(cloudArea)) %>%
+  ungroup()
+
+#convert date format 
+data$date <- as.Date(data$date, format = "%Y_%m_%d")
+
+# EXPORT
+path <- "C:/Users/addyp/Dropbox (University of Oregon)/Research/R_Output" #laptop: addyp, desktop: apletch2
+write.csv(data, file.path(path, "fullszn_dataset.csv"), row.names = FALSE)
+```
+
+#Comparing harmonized and normal dataset
+```{r}
+normal1 <- read.csv("G:/My Drive/YKD_water/raw_csvs/fullszn_2018_06_29.csv")
+normal2 <- read.csv("G:/My Drive/YKD_water/raw_csvs/fullszn_2018_06_30.csv")
+
+harmonized1 <- read.csv("G:/My Drive/YKD_water/harmonized_2018_06_29.csv")
+harmonized2 <- read.csv("G:/My Drive/YKD_water/harmonized_2018_06_30.csv")
+
+#COMPARISON
+summary(harmonized2)
+summary(normal2)
+
+# Compare the data values
+if(all.equal(normal2, harmonized2)) {
+  cat("Data values are identical.\n")
+} else {
+  cat("Data values are different.\n")
+}
+
+# compare another way for good measure
+if (identical(normal1, harmonized1)) {
+  cat("The objects are identical.\n")
+} else {
+  cat("The objects are not identical.\n")
+}
+```
+
+# Observation Filtering
+```{r}
+# OBSERVATION FILTERING
+
+#no clouds at all
+filtered_1 <- data %>%
+  filter(waterArea != 0 | clearArea != 0 | cloudArea != 0) %>% #removes all rows that have zeros for all data
+  filter(cloudArea == 0) #only keep values that equal zero
+
+
+#some clouds relative to total area
+data2 <- data %>%
+  group_by(Lake_ID, date) %>%
+  mutate(cloudRatio = (cloudArea) / (totalArea)) %>% #add cloudRatio column
+  ungroup()
+
+# 20% cloud threshold
+filtered_2 <- data2 %>%
+  filter(waterArea != 0 | clearArea != 0 | cloudArea != 0) %>% #removes all rows that have zeros for all data
+  filter(cloudRatio < 0.2)
+
+# 10% cloud threshold
+filtered_3 <- data2 %>%
+  filter(waterArea != 0 | clearArea != 0 | cloudArea != 0) %>% #removes all rows that have zeros for all data
+  filter(cloudRatio < 0.1)
+
+```
+
+## Filtering Test
+```{r}
+# Test filtering 
+
+#FILTER 1
+quad1 <- filtered_1 %>%
+  filter(Lake_ID  == '12772'| Lake_ID  == '12555' | Lake_ID  == '7146' | Lake_ID  == '5698') %>%
+  filter(date >= as.Date("2018-06-01") & date <= as.Date("2018-09-30")) %>%
+  filter(waterArea != 0)
+
+ggplot(quad1, aes(x=date, y=waterArea, group = 1)) + 
+  geom_point() +
+  facet_wrap(~Lake_ID) +
+  scale_x_date(date_labels = "%Y-%m-%d", date_breaks = "2 weeks", expand = c(0, 0)) +
+  #scale_x_discrete(guide = guide_axis(angle = 45)) +
+  ggtitle("Filter1 Test")
+
+#FILTER 2
+quad2 <- filtered_2 %>%
+  filter(Lake_ID  == '12772'| Lake_ID  == '12555' | Lake_ID  == '7146' | Lake_ID  == '5698') %>%
+  filter(date >= as.Date("2018-06-01") & date <= as.Date("2018-09-30")) %>%
+  filter(waterArea != 0)
+
+ggplot(quad2, aes(x=date, y=waterArea, group = 1)) + 
+  geom_point() +
+  facet_wrap(~Lake_ID) +
+  scale_x_date(date_labels = "%Y-%m-%d", date_breaks = "2 weeks", expand = c(0, 0)) +
+  #scale_x_discrete(guide = guide_axis(angle = 45)) +
+  ggtitle("Filter2 Test")
+
+#FILTER 3
+quad3 <- filtered_3 %>%
+  filter(Lake_ID  == '12772'| Lake_ID  == '12555' | Lake_ID  == '7146' | Lake_ID  == '5698') %>%
+  filter(date >= as.Date("2018-06-01") & date <= as.Date("2018-09-30")) %>%
+  filter(waterArea != 0)
+
+ggplot(quad3, aes(x=date, y=waterArea, group = 1)) + 
+  geom_point() +
+  facet_wrap(~Lake_ID) +
+  scale_x_date(date_labels = "%Y-%m-%d", date_breaks = "2 weeks", expand = c(0, 0)) +
+  #scale_x_discrete(guide = guide_axis(angle = 45)) +
+  ggtitle("Filter3 Test")
+
+```
+
+
+# Visualization
+```{r}
+#Time Series Visualization
+test <- data %>% 
+  filter(Lake_ID == '674')
+
+ggplot(test, aes(x=date, y=waterArea, group = 1)) + 
+  geom_line() +
+  facet_wrap(~id) +
+  scale_x_discrete(guide = guide_axis(angle = 45)) +
+  ggtitle("Lake 674 Test")
+```
+
+
+```{r}
+# VISUALIZATION
+
+poop <- data %>% group_by(id) #%>%
+ggplot(poop, aes(x=date, y=waterArea, group = id, color = id)) + geom_line() 
+  #xlab () +
+  #scale_x_date(date_labels = "%b %d %Y")  #Formatting date labels as "Jan 01 2016"
+
+
+
+  
+```
+
+
+
