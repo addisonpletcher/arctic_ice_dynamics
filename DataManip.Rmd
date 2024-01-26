@@ -1,0 +1,274 @@
+---
+title: "R Notebook"
+output: html_notebook
+editor_options: 
+  chunk_output_type: console
+---
+# 1 | Preliminary
+```{r} 
+# PACKAGE INSTALL
+#install.packages("vroom")
+#install.packages("stringr")
+#install.packages("ggplot2")
+
+# IMPORT LIBRARIES
+library(vroom)
+library(stringr)
+library(tidyverse)
+library(stats)
+
+#Gdrive
+setwd("G:/My Drive/YKD_water")
+``` 
+
+# 2 | CSV Manipulation
+For merging of input CSVs
+```{r}
+#Gdrive
+setwd("G:/My Drive/YKD_water") 
+
+# Making list of csvs
+files <- list.files('raw_csvs', full.names = FALSE)
+
+  #Gdrive
+setwd("G:/My Drive/YKD_water/raw_csvs")
+
+# FUNCTION (merging files on ID + adding date column based on filename)
+download_data <- function(files){
+  
+  temp <- read_csv(paste0(files)) %>% 
+    as_tibble() %>% 
+    mutate("date" = str_sub(files, 9, 18)) #alter numbers here based on file name change 
+  
+  return(temp)
+  
+}
+
+#Gdrive
+setwd("G:/My Drive/YKD_water/raw_csvs")
+
+# APPLY function
+data <- files %>% 
+  map(download_data) %>% 
+  reduce(bind_rows)
+```
+
+
+# 3 | Data Manipulation
+This cell always applied to all data
+```{r}
+#add totalArea as column (based on maximum cloudArea)
+data <- data %>% 
+  group_by(Lake_ID) %>%
+  mutate(totalArea = max(cloudArea)) %>%
+  ungroup()
+
+#add cloud ratio column
+data <- data %>%
+  group_by(Lake_ID, date) %>%
+  mutate(cloudRatio = (cloudArea) / (totalArea)) %>% #add cloudRatio column
+  ungroup()
+
+#convert date format 
+data$date <- as.Date(data$date, format = "%Y_%m_%d")
+
+#remove all rows that have zeros for all data
+data <- data %>%
+  filter(waterArea != 0 | clearArea != 0 | cloudArea != 0)
+
+# EXPORT
+#path <- "C:/Users/addyp/Dropbox (University of Oregon)/Research/R_Output" #laptop: addyp, desktop: apletch2
+#write.csv(data, file.path(path, "fullszn_dataset.csv"), row.names = FALSE)
+```
+
+## 3.1 | Outlier Removal 
+### Z Score Method
+```{r}
+# apply 10% cloud threshold
+dataZ <- data %>%
+  filter(cloudRatio < 0.1) #remove rows w/ > 10% clouds
+
+
+# add Z scores as column, by each lake
+dataZ <- data %>%
+  group_by(Lake_ID) %>%
+  mutate(z_score = scale(waterArea))
+
+z_score_threshold <- 3.0
+
+filtered_data_z <- dataZ %>%
+  filter(abs(z_score) <= z_score_threshold)
+
+#check how much was removed 
+removed_rows <- nrow(dataZ) - nrow(filtered_data_z)
+cat("Number of removed rows:", removed_rows, "\n")
+#Z thresh=3.0 removes 13027 rows (2.3% of dataset)
+#Z thresh=2.5 removes 22371 rows
+#Z thresh=2.0 removes 33926 rows
+
+#Visualize
+Z <- filtered_data_z %>%
+  filter(Lake_ID  == '12772'| Lake_ID  == '12555' | Lake_ID  == '7146' | Lake_ID  == '5698') %>%
+  filter(date >= as.Date("2018-06-01") & date <= as.Date("2018-09-30")) %>%
+  filter(waterArea != 0)
+
+
+ggplot(Z, aes(x=date, y=waterArea, group = 1)) + 
+  geom_point() +
+  facet_wrap(~Lake_ID) +
+  scale_x_date(date_labels = "%Y-%m-%d", date_breaks = "2 weeks", expand = c(0, 0)) +
+  #scale_x_discrete(guide = guide_axis(angle = 45)) +
+  ggtitle("Outlier Removal Test - Z")
+
+```
+
+### Quantile Method
+```{r}
+dataQ <- data %>%
+  group_by(Lake_ID) %>%
+  mutate(Q1 = quantile(waterArea, 0.25),
+         Q3 = quantile(waterArea, 0.75),
+         IQR = Q3 - Q1)
+
+iqr_multiplier <- 3
+
+filtered_data_q <- dataQ %>%
+  filter(waterArea >= Q1 - iqr_multiplier * IQR,
+         waterArea <= Q3 + iqr_multiplier * IQR)
+
+#check how much was removed 
+removed_rows <- nrow(dataQ) - nrow(filtered_data_q)
+cat("Number of removed rows:", removed_rows, "\n")
+#IQR x 1.5 removes 53054 rows
+#IQR x 2.5 removes 37576 rows
+#IQR x 3.0 removes 32518 rows (6.1% of dataset)
+```
+
+
+# Visualization
+```{r}
+#Time Series Visualization
+test <- data %>% 
+  filter(Lake_ID == '674')
+
+ggplot(test, aes(x=date, y=waterArea, group = 1)) + 
+  geom_line() +
+  facet_wrap(~id) +
+  scale_x_discrete(guide = guide_axis(angle = 45)) +
+  ggtitle("Lake 674 Test")
+```
+
+
+```{r}
+# VISUALIZATION
+
+poop <- data %>% group_by(id) #%>%
+ggplot(poop, aes(x=date, y=waterArea, group = id, color = id)) + geom_line() 
+  #xlab () +
+  #scale_x_date(date_labels = "%b %d %Y")  #Formatting date labels as "Jan 01 2016"
+
+
+
+  
+```
+
+#Supplementary Info/Resources
+```{r}
+#location info/paths
+#desktop
+#setwd("C:/Users/apletch2/Dropbox (University of Oregon)/Research")
+
+#laptop
+#setwd("C:/Users/addyp/Dropbox (University of Oregon)/Research")
+
+```
+
+##Comparing harmonized and normal dataset
+```{r}
+
+normal1 <- read.csv("G:/My Drive/YKD_water/raw_csvs/fullszn_2018_06_29.csv")
+normal2 <- read.csv("G:/My Drive/YKD_water/raw_csvs/fullszn_2018_06_30.csv")
+
+harmonized1 <- read.csv("G:/My Drive/YKD_water/harmonized_2018_06_29.csv")
+harmonized2 <- read.csv("G:/My Drive/YKD_water/harmonized_2018_06_30.csv")
+
+#COMPARISON
+summary(harmonized2)
+summary(normal2)
+
+# Compare the data values
+if(all.equal(normal2, harmonized2)) {
+  cat("Data values are identical.\n")
+} else {
+  cat("Data values are different.\n")
+}
+
+# compare another way for good measure
+if (identical(normal1, harmonized1)) {
+  cat("The objects are identical.\n")
+} else {
+  cat("The objects are not identical.\n")
+}
+```
+
+## Cloud Filtering
+```{r}
+# OBSERVATION FILTERING (zeros removed before this step)
+
+# 0% cloud threshold
+filtered_1 <- data %>%
+  filter(cloudArea == 0) #only keep values that equal zero
+
+# 10% cloud threshold
+filtered_2 <- data %>%
+  filter(cloudRatio < 0.1) #remove rows w/ > 10% clouds
+
+# 20% cloud threshold
+filtered_3 <- data %>%
+  filter(cloudRatio < 0.2) #remove rows w/ > 20% clouds
+
+
+# TEST AND VISUALIZE 
+
+#FILTER 1
+quad1 <- filtered_1 %>%
+  filter(Lake_ID  == '12772'| Lake_ID  == '12555' | Lake_ID  == '7146' | Lake_ID  == '5698') %>%
+  filter(date >= as.Date("2018-06-01") & date <= as.Date("2018-09-30")) %>%
+  filter(waterArea != 0)
+
+ggplot(quad1, aes(x=date, y=waterArea, group = 1)) + 
+  geom_point() +
+  facet_wrap(~Lake_ID) +
+  scale_x_date(date_labels = "%Y-%m-%d", date_breaks = "2 weeks", expand = c(0, 0)) +
+  #scale_x_discrete(guide = guide_axis(angle = 45)) +
+  ggtitle("Filter1 Test")
+
+#FILTER 2
+quad2 <- filtered_2 %>%
+  filter(Lake_ID  == '12772'| Lake_ID  == '12555' | Lake_ID  == '7146' | Lake_ID  == '5698') %>%
+  filter(date >= as.Date("2018-06-01") & date <= as.Date("2018-09-30")) %>%
+  filter(waterArea != 0)
+
+ggplot(quad2, aes(x=date, y=waterArea, group = 1)) + 
+  geom_point() +
+  facet_wrap(~Lake_ID) +
+  scale_x_date(date_labels = "%Y-%m-%d", date_breaks = "2 weeks", expand = c(0, 0)) +
+  #scale_x_discrete(guide = guide_axis(angle = 45)) +
+  ggtitle("Filter2 Test")
+
+#FILTER 3
+quad3 <- filtered_3 %>%
+  filter(Lake_ID  == '12772'| Lake_ID  == '12555' | Lake_ID  == '7146' | Lake_ID  == '5698') %>%
+  filter(date >= as.Date("2018-06-01") & date <= as.Date("2018-09-30")) %>%
+  filter(waterArea != 0)
+
+ggplot(quad3, aes(x=date, y=waterArea, group = 1)) + 
+  geom_point() +
+  facet_wrap(~Lake_ID) +
+  scale_x_date(date_labels = "%Y-%m-%d", date_breaks = "2 weeks", expand = c(0, 0)) +
+  #scale_x_discrete(guide = guide_axis(angle = 45)) +
+  ggtitle("Filter3 Test")
+
+```
+
+
