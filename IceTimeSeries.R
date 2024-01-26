@@ -1,4 +1,10 @@
 # Preliminary ------------------------------------------------------------------
+install.packages("vroom")
+installed.packages("stringr")
+install.packages("tidyverse")
+install.packages("stats")
+install.packages("dplyr")
+
 # IMPORT LIBRARIES
 library(vroom)
 library(stringr)
@@ -151,9 +157,12 @@ ifilt_cloud_z <- ifilt_cloud_z %>%
 
 #### Median Filter -----------------------------------------------------
 # Apply a 5-observation median filter to iceArea for each lake group
+install.packages("zoo")
+library(zoo)
+
 ifilt_cloud_med <- ifilt_cloud %>%
   group_by(Lake_ID) %>%
-  mutate(median_filtered_iceArea = zoo::rollapply(iceArea, width = 5, FUN = median, fill = NA, align = "center", partial = FALSE))                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            mutate(median_filtered_iceArea = zoo::rollapply(iceArea, width = 5, FUN = median, fill = NA, align = "center", partial = FALSE))
+  mutate(median_filtered_iceArea = zoo::rollapply(iceArea, width = 5, FUN = median, fill = NA, align = "center", partial = FALSE))
 
 #### Hampel -----------------------------------------------------
 # install.packages("pracma")
@@ -183,6 +192,31 @@ big_lakes <- c(18760, 23797, 12693, 1836, 25356, 25393, 8165, 22520, 15701, 1816
 small_lakes <- c(2876, 23096, 17726, 3533, 2285, 23192, 2876, 4850, 8822, 3352)
 all_lakes <- c(18760, 23797, 12693, 1836, 25356, 25393, 8165, 22520, 15701, 18169, 2876, 23096, 17726, 3533, 2285, 23192, 2876, 4850, 8822, 3352, 17673, 19378)
 
+# Normalizing dataframe
+ifilt_cloud_med <- ifilt_cloud_med %>%
+  mutate(iceArea_percent = (median_filtered_iceArea / totalArea) * 100)
+
+#subset dataframe for all normalized lakes
+filtered_lake_data <- ifilt_cloud_med[ifilt_cloud_med$Lake_ID %in% all_lakes, ]
+
+## All Lakes -----------------------------------------------------------------
+
+ggplot(filtered_lake_data, aes(x = date)) +
+  geom_point(aes(y = iceArea_percent, color = "Ice"), size = 2) +
+  scale_x_date(date_labels = "%b", date_breaks = "1 week", expand = c(0, 0)) +
+  scale_color_manual(values = c("Water" = "#3B7780", "Ice" = "#A2B5AC")) +
+  geom_hline(yintercept = 25, linetype = "dashed", color = "#C4846E") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  lims(x = as.Date(c("2018-04-01", "2018-06-30"))) +
+  labs(title = "2018 Ice Breakup",
+       x = "Date",
+       y = "Area (sq m)") +
+  facet_wrap(~Lake_ID) +
+  ylim(0, 100) +
+  theme_grey() 
+
+
+## Big/Small Lakes -----------------------------------------------------------------
 #subset dataframes
 lake_data_small <- merged[merged$Lake_ID %in% small_lakes, ]
 lake_data_big <- merged[merged$Lake_ID %in% big_lakes, ]
@@ -190,13 +224,6 @@ lake_data_big <- merged[merged$Lake_ID %in% big_lakes, ]
 #big and small subset dataframes from median filter method
 lake_data_small_med <- ifilt_cloud_med[ifilt_cloud_med$Lake_ID %in% small_lakes, ]
 lake_data_big_med <- ifilt_cloud_med[ifilt_cloud_med$Lake_ID %in% big_lakes, ]
-
-# Normalizing dataframe
-ifilt_cloud_med <- ifilt_cloud_med %>%
-  mutate(iceArea_percent = (median_filtered_iceArea / totalArea) * 100)
-
-#subset dataframe for all normalized lakes
-filtered_lake_data <- ifilt_cloud_med[ifilt_cloud_med$Lake_ID %in% all_lakes, ]
 
 # Big lakes Graph 
 ggplot(lake_data_big_med, aes(x = date)) +
@@ -235,18 +262,47 @@ ggplot(lake_data_small_med, aes(x = date)) +
   lims(x = as.Date(c("2018-04-01", "2018-06-30")))
 # scale_y_continuous(labels = scales::number_format(scale = 1e2))
 
-#all lakes graph
-ggplot(filtered_lake_data, aes(x = date)) +
-  geom_point(aes(y = iceArea_percent, color = "Ice"), size = 2) +
-  scale_x_date(date_labels = "%b", date_breaks = "1 week", expand = c(0, 0)) +
-  scale_color_manual(values = c("Water" = "#3B7780", "Ice" = "#A2B5AC")) +
-  geom_hline(yintercept = 25, linetype = "dashed", color = "#C4846E") +
-  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
-  lims(x = as.Date(c("2018-04-01", "2018-06-30"))) +
-  labs(title = "2018 Ice Breakup",
-       x = "Date",
-       y = "Area (sq m)") +
-  facet_wrap(~Lake_ID) +
-  ylim(0, 100) +
-  theme_grey() 
+# Breakup Date Calculation -----------------------------------------------------
+library(dplyr)
+library(tidyr)
 
+#function to estimate breakup date for one lake
+estimate_breakup_date <- function(lake_data) {
+  results <- data.frame(Date = as.Date(character()), Breakup_Estimate = as.Date(character()))
+  
+  for (i in 1:(nrow(lake_data) - 1)) {
+    # Check for NA values in the current and next row
+    if (!is.na(lake_data$iceArea_percent[i]) && !is.na(lake_data$iceArea_percent[i + 1])) {
+      if (lake_data$iceArea_percent[i] > 25 && lake_data$iceArea_percent[i + 1] <= 25) {
+        # Linear interpolation to estimate the breakup date
+        date1 <- lake_data$date[i]
+        date2 <- lake_data$date[i + 1]
+        percent1 <- lake_data$iceArea_percent[i]
+        percent2 <- lake_data$iceArea_percent[i + 1]
+        
+        # Calculate the weight for interpolation based on iceArea_percent
+        weight <- (25 - percent1) / (percent2 - percent1)
+        
+        # Calculate the estimated breakup date
+        days_between <- as.numeric(date2 - date1)
+        estimated_date <- date1 + days_between * weight
+        
+        # Append the estimated breakup date to the results dataframe
+        results <- rbind(results, data.frame(Date = date1, Breakup_Estimate = estimated_date))
+      }
+    }
+  }
+  
+  return(results)
+}
+
+
+# Apply the function to each Lake_ID group
+breakup_dates <- filtered_lake_data %>%
+  group_by(Lake_ID) %>%
+  do(estimate_breakup_date(.)) %>%
+  ungroup()
+
+# Optional: Spread the results for better readability if needed
+breakup_dates <- breakup_dates %>%
+  spread(key = Date, value = Breakup_Estimate)
