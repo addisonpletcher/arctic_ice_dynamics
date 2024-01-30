@@ -11,7 +11,7 @@ library(stringr)
 library(tidyverse)
 library(stats)
 library(dplyr)
-
+library(tidyr)
 # CSV Manipulation -------------------------------------------------------------
 
 ## Water data ------------------------------------------------------------------
@@ -201,10 +201,11 @@ filtered_lake_data <- ifilt_cloud_med[ifilt_cloud_med$Lake_ID %in% all_lakes, ]
 
 ## All Lakes -----------------------------------------------------------------
 
+#starting plot
 ggplot(filtered_lake_data, aes(x = date)) +
   geom_point(aes(y = iceArea_percent, color = "Ice"), size = 2) +
-  scale_x_date(date_labels = "%b", date_breaks = "1 week", expand = c(0, 0)) +
-  scale_color_manual(values = c("Water" = "#3B7780", "Ice" = "#A2B5AC")) +
+  scale_x_date(date_labels = "%b %d", date_breaks = "2 weeks", expand = c(0, 0)) +
+  scale_color_manual(values = c("Ice" = "#A2B5AC")) +
   geom_hline(yintercept = 25, linetype = "dashed", color = "#C4846E") +
   theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
   lims(x = as.Date(c("2018-04-01", "2018-06-30"))) +
@@ -214,6 +215,60 @@ ggplot(filtered_lake_data, aes(x = date)) +
   facet_wrap(~Lake_ID) +
   ylim(0, 100) +
   theme_grey() 
+
+#all lakes with breakup date line
+ggplot(filtered_lake_data, aes(x = date)) +
+  geom_point(aes(y = iceArea_percent, color = "Ice"), size = 2) +
+  scale_x_date(date_labels = "%b %d", date_breaks = "2 weeks", expand = c(0, 0)) +
+  scale_color_manual(values = c("Ice" = "#A2B5AC")) +
+  geom_hline(yintercept = 25, linetype = "dashed", color = "#C4846E") +
+  geom_vline(data = breakup_dates, aes(xintercept = as.numeric(Breakup_Estimate)), linetype = "solid", color = "red", size = 1) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  lims(x = as.Date(c("2018-04-01", "2018-06-30"))) +
+  labs(title = "2018 Ice Breakup",
+       x = "Date",
+       y = "Area (sq m)") +
+  facet_wrap(~Lake_ID) +
+  ylim(0, 100) +
+  theme_grey()
+
+#all lakes with breakup date dot, error bars? NOT working need to fix (TODO)
+ggplot(filtered_lake_data, aes(x = date)) +
+  geom_point(aes(y = iceArea_percent, color = "Ice"), size = 2) +
+  scale_x_date(date_labels = "%b %d", date_breaks = "2 weeks", expand = c(0, 0)) +
+  scale_color_manual(values = c("Ice" = "#A2B5AC")) +
+  geom_hline(yintercept = 25, linetype = "dashed", color = "#C4846E") +
+  geom_point(data = breakup_dates, aes(x = Breakup_Estimate, y = 25), color = "red", size = 1) +
+  geom_errorbar(data = breakup_dates, aes(x = Breakup_Estimate, ymin = 25, ymax = 25, xmin = Lower_Bound, xmax = Upper_Bound), color = "red") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  lims(x = as.Date(c("2018-04-01", "2018-06-30"))) +
+  labs(title = "2018 Ice Breakup",
+       x = "Date",
+       y = "Area (%)") +
+  facet_wrap(~Lake_ID) +
+  ylim(0, 100) +
+  theme_grey()
+
+#all lakes w/breakup date dot and callout date
+ggplot(filtered_lake_data, aes(x = date)) +
+  geom_point(aes(y = iceArea_percent, color = "Ice"), size = 2) +
+  scale_x_date(date_labels = "%b %d", date_breaks = "2 weeks", expand = c(0, 0)) +
+  scale_color_manual(values = c("Ice" = "#A2B5AC")) +
+  geom_hline(yintercept = 25, linetype = "dashed", color = "#C4846E") +
+  geom_point(data = breakup_dates, aes(x = Breakup_Estimate, y = 25), color = "red3", size = 2) +
+  geom_text(data = breakup_dates, aes(x = Breakup_Estimate, y = 25, label = format(Breakup_Estimate, "%b %d")), vjust = -1, color = "red3", size = 3, nudge_x = 10) +
+  geom_point(data = breakup_dates, aes(x = breakup_date_avgd, y = 25), color = "tan4", size = 2) +
+  geom_text(data = breakup_dates, aes(x = Breakup_Estimate, y = 25, label = format(breakup_date_avgd, "%b %d")), vjust = +2, color = "tan4", size = 3, nudge_x = -10) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  lims(x = as.Date(c("2018-04-01", "2018-06-30"))) +
+  labs(title = "2018 Ice Breakup",
+       x = "Date",
+       y = "Area (% ice)") +
+  facet_wrap(~Lake_ID) +
+  ylim(0, 100) +
+  theme_grey()
+
+
 
 
 ## Big/Small Lakes -----------------------------------------------------------------
@@ -263,9 +318,7 @@ ggplot(lake_data_small_med, aes(x = date)) +
 # scale_y_continuous(labels = scales::number_format(scale = 1e2))
 
 # Breakup Date Calculation -----------------------------------------------------
-library(dplyr)
-library(tidyr)
-
+## Via Linear Interpolation ----------------------------------------------------
 #function to estimate breakup date for one lake
 estimate_breakup_date <- function(lake_data) {
   results <- data.frame(Date = as.Date(character()), Breakup_Estimate = as.Date(character()))
@@ -288,7 +341,7 @@ estimate_breakup_date <- function(lake_data) {
         estimated_date <- date1 + days_between * weight
         
         # Append the estimated breakup date to the results dataframe
-        results <- rbind(results, data.frame(Date = date1, Breakup_Estimate = estimated_date))
+        results <- rbind(results, data.frame(Breakup_Estimate = estimated_date,  Lower_Bound = date1, Upper_Bound = date2))
       }
     }
   }
@@ -296,13 +349,13 @@ estimate_breakup_date <- function(lake_data) {
   return(results)
 }
 
-
 # Apply the function to each Lake_ID group
 breakup_dates <- filtered_lake_data %>%
   group_by(Lake_ID) %>%
   do(estimate_breakup_date(.)) %>%
   ungroup()
 
-# Optional: Spread the results for better readability if needed
-breakup_dates <- breakup_dates %>%
-  spread(key = Date, value = Breakup_Estimate)
+## Via averaging ----------------------------------------------------
+breakup_dates$breakup_date_avgd <- with(breakup_dates, Lower_Bound + as.numeric(Upper_Bound - Lower_Bound) / 2)
+
+
