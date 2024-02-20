@@ -17,7 +17,7 @@ download_dataI <- function(filesIce){
   
   temp <- read_csv(paste0(filesIce)) %>% 
     as_tibble() %>% 
-    mutate("date" = str_sub(filesIce, 16, 25)) #alter numbers here based on file name change 
+    mutate("date" = str_sub(filesIce, 15, 24)) #alter numbers here based on file name change 
   
   return(temp)
   
@@ -28,68 +28,29 @@ Icedata <- filesIce %>%
   map(download_dataI) %>% 
   reduce(bind_rows)
 
-# Pre-Merge Filtering -----------------------------------------------------
+# Data Filtering -----------------------------------------------------
 
-#date filter
-Idata$date <- as.Date(Idata$date, format = "%Y_%m_%d")
+#date formatting
+Icedata$date <- as.Date(Icedata$date, format = "%Y_%m_%d")
 
-# #add totalArea as column to Wdata (based on maximum cloudArea)
-# Wdata_date <- Wdata_date %>% 
-#   group_by(Lake_ID) %>%
-#   mutate(totalArea = max(cloudArea)) %>%
-#   ungroup()
-# #add totalArea as column to Idata (based on maximum cloudArea)
-# Idata_date <- Idata_date %>% 
-#   group_by(Lake_ID) %>%
-#   mutate(totalArea = max(cloudArea)) %>%
-#   ungroup()
 
 ### Clouds -----------------------------------------------------
-#add cloud ratio column to Wdata
-# Wdata_date <- Wdata_date %>%
-#   group_by(Lake_ID, date) %>%
-#   mutate(cloudRatio = (cloudArea) / (totalArea)) %>% #add cloudRatio column
-#   ungroup()
+
 #add cloud ratio column to Idata
 Idata_cloudratio <- Icedata %>%
   group_by(Lake_ID, date) %>%
   mutate(cloudRatio = (cloudArea) / (totalArea)) %>% #add cloudRatio column
   ungroup()
 
-### Zeros -----------------------------------------------------
-# #remove all rows that have zeros for all data (water)
-# wfilt <- Wdata_date %>%
-#   filter(waterArea != 0 | clearArea_buff != 0 | cloudArea != 0)
-#remove all rows that have zeros for all data (ice)
+### Removals  -----------------------------------------------------
 ifilt <- Idata_cloudratio %>%
   filter(iceArea != 0 | clearArea != 0 | cloudArea != 0)
 
-# #apply cloud ratio filter for water
-# wfilt_cloud <- wfilt %>%
-#   filter(cloudRatio < 0.1) #remove rows w/ > 10% clouds
 #apply cloud ratio filter for ice
 ifilt_cloud <- ifilt %>%
   filter(cloudRatio < 0.1) #remove rows w/ > 10% clouds
 
-### Outliers -----------------------------------------------------
-#### Z Score -----------------------------------------------------
-# # add Z scores as column, WATER
-# wfilt_cloud_z <- wfilt_cloud %>%
-#   group_by(Lake_ID) %>%
-#   mutate(z_score = scale(waterArea))
-# # add Z scores as column, ICE
-# ifilt_cloud_z <- ifilt_cloud %>%
-#   group_by(Lake_ID) %>%
-#   mutate(z_score = scale(iceArea))
-# 
-# z_score_threshold <- 3.0
-# 
-# # filter: 3 std away, WATER
-# wfilt_cloud_z <- wfilt_cloud_z %>%
-#   filter(abs(z_score) <= z_score_threshold)
-# # filter: 3 std away, ICE
-# ifilt_cloud_z <- ifilt_cloud_z %>%
-#   filter(abs(z_score) <= z_score_threshold)
+### Outlier Removal -----------------------------------------------------
 
 #### Median Filter -----------------------------------------------------
 # Apply a 5-observation median filter to iceArea for each lake group
@@ -99,24 +60,6 @@ library(zoo)
 ifilt_cloud_medfilt <- ifilt_cloud %>%
   group_by(Lake_ID) %>%
   mutate(median_filtered_iceArea = zoo::rollapply(iceArea, width = 5, FUN = median, fill = NA, align = "center", partial = FALSE))
-
-#### Hampel -----------------------------------------------------
-# install.packages("pracma")
-# library(pracma)
-# 
-# #set threshold
-# hampel_threshold <- 3.0
-# 
-# 
-# ##### Hampel not functioning, error returned:  `hampel_score` must be size 16 or 1, not 2.
-# #apply hampel filter
-# ifilt_cloud_hamp <- ifilt_cloud %>%
-#   group_by(Lake_ID) %>%
-#   mutate(hampel_score = hampel(iceArea, k = hampel_threshold))
-# 
-# # Filter based on the Hampel scores for ICE
-# ifilt_cloud_hampel_filtered <- ifilt_cloud_hampel %>%
-#   filter(abs(hampel_score) <= threshold * mad(iceArea))
 
 #Visualization -----------------------------------------------------------------
 
