@@ -7,6 +7,8 @@ install.packages("stats")
 install.packages("dplyr")
 install.packages("tidyr")
 install.packages("zoo")
+install.packages("pbapply")
+
 
 # IMPORT LIBRARIES
 library(vroom)
@@ -17,10 +19,13 @@ library(dplyr)
 library(tidyr)
 library(zoo)
 
+library(pbapply)
+library(purrr)
+
 # CSV Manipulation -------------------------------------------------------------
 
 # Making list of csvs
-setwd("G:/My Drive/YKD_feb19")
+setwd("G:/My Drive/YKD_gridded/2016")
 
 filesIce <- list.files(full.names = FALSE)
 
@@ -29,22 +34,21 @@ download_dataI <- function(filesIce){
   
   temp <- read_csv(paste0(filesIce)) %>% 
     as_tibble() %>% 
-    mutate("date" = str_sub(filesIce, 15, 24)) #alter numbers here based on file name change 
+    # mutate("date" = str_sub(filesIce, 9, 18))
+  # alternate mutate line so that date will be pulled correctly from filenames 
+    mutate(date = as.Date(str_extract(filesIce, "\\d{4}_\\d{2}_\\d{2}"), format = "%Y_%m_%d"))
   
   return(temp)
   
 }
 
 # APPLY function
-Icedata <- filesIce %>% 
-  map(download_dataI) %>% 
+Icedata <- filesIce %>%
+  map(download_dataI) %>%
   reduce(bind_rows)
-
-
-
-
-
-
+# # APPLY function with progress bar
+# Icedata <- pblapply(filesIce, download_dataI) %>% 
+#   reduce(bind_rows)
 
 
 
