@@ -234,8 +234,14 @@ ifilt_cloud_medfilt_norm <- ifilt_cloud_medfilt %>%
   mutate(iceArea_percent = (median_filtered_iceArea / measuredArea) * 100)
 
 
+#extract lat/long from centroid
+ifilt_cloud_medfilt_norm <- ifilt_cloud_medfilt_norm %>%
+  mutate(centroid = gsub("\\[|\\]", "", centroid)) %>%
+  separate(centroid, into = c("longitude", "latitude"), sep = ",", convert = TRUE)
 
-
+# Convert the new columns from character to numeric if not automatically done
+ifilt_cloud_medfilt_norm$longitude <- as.numeric(ifilt_cloud_medfilt_norm$longitude)
+ifilt_cloud_medfilt_norm$latitude <- as.numeric(ifilt_cloud_medfilt_norm$latitude)
 
 
 
@@ -259,28 +265,102 @@ ifilt_cloud_medfilt_norm <- ifilt_cloud_medfilt %>%
 
 
 # Add temperature data -------------------------------------------------------
-setwd("G:/My Drive/Kusk_TempData")
+# setwd("G:/My Drive/Lake_TempData_2016")
+# 
+# #read temp csv
+# Lake_Temperature <- read_csv('Lake_Temperature_2016.csv')
+# 
+# # Ensure 'date' is in Date format and 'Lake_ID' matches the type in ifilt_cloud_medfilt_norm
+# Lake_Temperature$date <- as.Date(Lake_Temperature$date, format = "%Y-%m-%d")  # Adjust the format as necessary
 
-#read temp csv
-Lake_Temperature_2020 <- read_csv('Lake_Temperature_2020.csv')
+#new temp data method
+install.packages("sf")
+install.packages("terra")
+library(sf)
+library(raster)
 
-# Ensure 'date' is in Date format and 'Lake_ID' matches the type in ifilt_cloud_medfilt_norm
-Lake_Temperature_2020$date <- as.Date(Lake_Temperature_2020$date, format = "%Y-%m-%d")  # Adjust the format as necessary
+# convert dataframe to sf object
+lakes_sf <- st_as_sf(ifilt_cloud_medfilt_norm, coords = c("longitude", "latitude"), crs = 4326)
+
+# Load the raster data
+era5_raster <- stack("G:/My Drive/GEE_Data/2016_ERA5_Temps.tif")
+print(era5_raster)
+
+# Extract band names
+band_names <- names(era5_raster)
+print(band_names)
+# Extract dates from band names using regular expressions
+dates <- sub("X(\\d{8}).*", "\\1", band_names)
+# Convert the extracted date strings to Date objects
+dates <- as.Date(dates, format = "%Y%m%d")
+
+##### ABOVE HERE WORKS FOR SPATIAL JOING FOR TEMP
+####  below here runs good, but all the dates are still 2016-01-01
+
+
+library(pbapply)
+# Assuming 'lakes_sf' is your spatial dataframe
+results_list <- pblapply(1:length(dates), function(i) {
+  temperature_values <- extract(era5_raster[[i]], lakes_sf)
+  
+  # Combine temperature values with the corresponding date and lake IDs
+  data.frame(Lake_ID = lakes_sf$Lake_ID,
+             Date = rep(dates[i], length(temperature_values)),
+             Temperature = temperature_values)
+})
+#above takes about 8 minutes to run
+
+# Combine all the results into one dataframe
+temperature_data <- do.call(rbind, results_list)
+
+
+
+
+
+
+
+
+
+
+
 
 #merge datasets
 final_dataset <- ifilt_cloud_medfilt_norm %>%
-  left_join(Lake_Temperature_2020, by = c("Lake_ID", "date"))
-### why isn't temp data working? -------------------------------------------------------
+  left_join(Lake_Temperature, by = c("Lake_ID", "date"))
+
+#drop unnecessary columns
+final_dataset <- final_dataset %>%
+  select(-discrepancy, -discrepancy_percentage,-mean_temperature_kelvin, -`system:index`, -.geo)  # columns to drop
+
+#reorder
+final_dataset <- final_dataset %>%
+  select(Lake_ID, iceArea_percent, date, mean_temperature_celsius, measuredArea, totalArea, centroid, median_filtered_iceArea, iceArea, clearArea, cloudArea, cloudRatio)
+
+## 0 deg isotherm calculation  -------------------------------------------------------
+# Calculate the 31-day rolling average for each lake
+Lake_Temperature <- Lake_Temperature %>%
+  group_by(Lake_ID) %>%
+  arrange(date) %>%
+  mutate(rolling_avg_temp = rollapply(mean_temperature_celsius, 31, mean, fill = NA, align = "center"))
+
+# Identify the zero degree isotherm crossing date for each lake
+iso_crossing_dates <- Lake_Temperature %>%
+  group_by(Lake_ID) %>%
+  filter(rolling_avg_temp < 0 & lead(rolling_avg_temp) >= 0) %>%
+  summarise(zero_degree_date = min(date))
+
+
+### temp data checks -------------------------------------------------------
 # Check unique Lake_IDs and dates in both datasets
 unique_lakes_main <- unique(ifilt_cloud_medfilt_norm$Lake_ID)
-unique_lakes_temp <- unique(Lake_Temperature_2020$Lake_ID)
+unique_lakes_temp <- unique(Lake_Temperature$Lake_ID)
 
 # Check for lakes in the main dataset that are not in the temperature dataset
 missing_lakes <- setdiff(unique_lakes_main, unique_lakes_temp)
 
 # Do the same for dates
 unique_dates_main <- unique(ifilt_cloud_medfilt_norm$date)
-unique_dates_temp <- unique(Lake_Temperature_2020$date)
+unique_dates_temp <- unique(Lake_Temperature$date)
 
 missing_dates <- setdiff(unique_dates_main, unique_dates_temp)
 
@@ -289,6 +369,22 @@ print(missing_lakes)
 print(missing_dates)
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+# EXPORT FINAL DF -------------------------------------------------------
+library(data.table)
+fwrite(final_dataset, "C:\\Users\\apletch2\\Dropbox (University of Oregon)\\Research\\FinalDatasets\\2016.csv")
 
 
 
@@ -313,7 +409,7 @@ estimate_breakup_date <- function(lake_data) {
   for (i in 1:(nrow(lake_data) - 1)) {
     # Check for NA values in the current and next row
     if (!is.na(lake_data$iceArea_percent[i]) && !is.na(lake_data$iceArea_percent[i + 1])) {
-      if (lake_data$iceArea_percent[i] > 25 && lake_data$iceArea_percent[i + 1] <= 25) {
+      if (lake_data$iceArea_percent[i] > 20 && lake_data$iceArea_percent[i + 1] <= 20) {
         # Linear interpolation to estimate the breakup date
         date1 <- lake_data$date[i]
         date2 <- lake_data$date[i + 1]
@@ -337,7 +433,7 @@ estimate_breakup_date <- function(lake_data) {
 }
 
 # Apply the function to each Lake_ID group
-breakup_dates <- ifilt_cloud_medfilt_norm %>%
+breakup_dates <- final_dataset %>%
   group_by(Lake_ID) %>%
   do(estimate_breakup_date(.)) %>%
   ungroup()
@@ -368,7 +464,7 @@ breakup_dates$breakup_date_avgd <- with(breakup_dates, Lower_Bound + as.numeric(
 all_lakes <- c(6,22,190,196,210,218,238,250,4469,4607,4475,6442,6520,7246,8813,63159,35403)
 
 #subset normalized dataframe for selected lakes
-data_forVis <- ifilt_cloud_medfilt_norm[ifilt_cloud_medfilt_norm$Lake_ID %in% all_lakes, ]
+data_forVis <- final_dataset[final_dataset$Lake_ID %in% all_lakes, ]
 
 data_forVis_complete <- data_forVis %>%
   filter(!is.na(iceArea_percent))
@@ -413,19 +509,36 @@ ggplot(data_forVis_complete, aes(x = date)) +
 
 
 
-# Size Analysis ----------------------------------------------------------------
+# Analysis Dataframe Prepping ----------------------------------------------------------------
 
 # Summarize the totalArea by Lake_ID to get a single value per lake
-ifilt_cloud_medfilt_summary <- ifilt_cloud_medfilt %>%
+#changed to measuredArea variable for accuracy
+size_analysis_df <- final_dataset %>%
   group_by(Lake_ID) %>%
-  summarise(totalArea = mean(totalArea, na.rm = TRUE))
+  summarise(measuredArea = mean(measuredArea, na.rm = TRUE))
 
-# Perform a left join to add the summarized totalArea to breakup_dates
-breakup_dates_with_area <- breakup_dates %>%
-  left_join(ifilt_cloud_medfilt_summary, by = "Lake_ID")
+# add the summarized totalArea to size analysis df
+size_analysis_df <- breakup_dates %>%
+  left_join(size_analysis_df, by = "Lake_ID")
 
+# add previously calculated 0 deg isotherm
+size_analysis_df <- size_analysis_df %>%
+  left_join(iso_crossing_dates, by = "Lake_ID")
+
+#remove unnecessary columns  
+size_analysis_df <- size_analysis_df %>%
+  select(-Date)
+
+# Size Analysis --------------------------------------------------
 ## bin by size -------------------------------------------------------------
-#Jenks
+### >/< 1 sq km----------------------------------------------------
+#Create a new binary variable for lake size groups 
+# Lakes larger than 1 square km (1000000 square meters) are labeled as 'Large', otherwise 'Small'
+size_analysis_df <- size_analysis_df %>%
+  mutate(size_group = ifelse(measuredArea > 1000000, "Larger", "Smaller"))
+
+
+### Jenks-------------------------------------------------------------
 install.packages("classInt")
 library(classInt)
 
@@ -433,29 +546,67 @@ library(classInt)
 number_of_bins <- 5
 
 # Calculate the natural breaks in the totalArea data
-breaks <- classIntervals(breakup_dates_with_area$totalArea, n = number_of_bins, style = "jenks")$brks
+breaks <- classIntervals(size_analysis_df$measuredArea, n = number_of_bins, style = "jenks")$brks
 
 # Create a new factor variable in the dataframe for the groupings
-breakup_dates_with_area$size_group_jenks <- cut(breakup_dates_with_area$totalArea, breaks = breaks, include.lowest = TRUE, labels = 1:number_of_bins)
+size_analysis_df$size_group_jenks <- cut(size_analysis_df$measuredArea, breaks = breaks, include.lowest = TRUE, labels = 1:number_of_bins)
 
 # View the first few rows of the dataframe to see the groupings
-head(breakup_dates_with_area)
+head(size_analysis_df)
+
+#what are the ranges of values in each size category?
+# Calculate min and max totalArea for each Jenks group
+jenks_area_ranges <- size_analysis_df %>%
+  group_by(size_group_jenks) %>%
+  summarise(
+    Min_Area = min(measuredArea, na.rm = TRUE),
+    Max_Area = max(measuredArea, na.rm = TRUE)
+  )
+
+# View the area ranges for each Jenks group
+print(jenks_area_ranges)
+
+#visualize data
+# Boxplot
+ggplot(size_analysis_df, aes(x = size_group, y = Breakup_Estimate)) +
+  geom_boxplot() +
+  labs(title = "Breakup Date by Lake Size Group",
+       x = "Size Group",
+       y = "Breakup Date") +
+  theme_minimal()
 
 
+# Scatterplot with jitter to avoid overplotting
+ggplot(size_analysis_df, aes(x = size_group, y = Breakup_Estimate)) +
+  geom_jitter(aes(color = size_group), width = .45) +
+  labs(title = "Breakup Date by Lake Size Group",
+       x = "Size Group",
+       y = "Breakup Date") +
+  theme_minimal() +
+  scale_color_brewer(palette = "Set1")
 
-# Quintiles
-breakup_dates_with_area <- breakup_dates_with_area %>%
-  mutate(size_group_quantiles = ntile(totalArea, 5))
+### Quintiles -------------------------------------------------------------
+# size_analysis_df <- size_analysis_df %>%
+#   mutate(size_group_quantiles = ntile(measuredArea, 5))
+# 
+# # Convert size_group_quantiles to a factor
+# size_analysis_df$size_group_quantiles <- as.factor(size_analysis_df$size_group_quantiles)
 
-# Convert size_group_quantiles to a factor
-breakup_dates_with_area$size_group_quantiles <- as.factor(breakup_dates_with_area$size_group_quantiles)
 
+## Visualize bin sizes + summary stats -----------------------------------------
+ggplot(size_analysis_df, aes(x = size_group, y = Breakup_Estimate_numeric, fill = size_group)) +
+  geom_boxplot() +
+  labs(title = "Comparison of Lake Breakup Dates by those >/< 1 sq km",
+       x = "Size Group",
+       y = "Breakup Date (Numeric)") +
+  theme_minimal() +
+  theme(legend.title = element_blank())  # Remove the legend title if not needed
 
 
 
 ## Calculate average breakup date and standard deviation for each size group----
-breakup_metrics_jenks <- breakup_dates_with_area %>%
-  group_by(size_group_jenks) %>%
+breakup_metrics <- size_analysis_df %>%
+  group_by(size_group) %>%
   summarise(
     Average_Breakup_Date = mean(as.numeric(Breakup_Estimate), na.rm = TRUE),
     SD_Breakup_Date = sd(as.numeric(Breakup_Estimate), na.rm = TRUE),
@@ -463,66 +614,23 @@ breakup_metrics_jenks <- breakup_dates_with_area %>%
   )
 
 # Convert the average breakup date from numeric back to Date
-breakup_metrics_jenks$Average_Breakup_Date <- as.Date(breakup_metrics_jenks$Average_Breakup_Date, origin = "1970-01-01")
+breakup_metrics$Average_Breakup_Date <- as.Date(breakup_metrics$Average_Breakup_Date, origin = "1970-01-01")
 
-#repeat for quintile 
-breakup_metrics_quint <- breakup_dates_with_area %>%
-  group_by(size_group_quantiles) %>%
-  summarise(
-    Average_Breakup_Date = mean(as.numeric(Breakup_Estimate), na.rm = TRUE),
-    SD_Breakup_Date = sd(as.numeric(Breakup_Estimate), na.rm = TRUE),
-    Count = n()  # This will count the number of observations in each group
-  )
-
-# Convert the average breakup date from numeric back to Date
-breakup_metrics_quint$Average_Breakup_Date <- as.Date(breakup_metrics_quint$Average_Breakup_Date, origin = "1970-01-01")
+# Print the breakup metrics by size group
+print(breakup_metrics)
 
 
-#visualize data, even though no statistically significant difference
-# Boxplot
-ggplot(breakup_dates_with_area, aes(x = size_group_jenks, y = Breakup_Estimate)) +
-  geom_boxplot() +
-  labs(title = "Breakup Date by Lake Size Group (Jenks)",
-       x = "Size Group",
-       y = "Breakup Date") +
-  theme_minimal()
 
 
-# Scatterplot with jitter to avoid overplotting
-ggplot(breakup_dates_with_area, aes(x = size_group_jenks, y = Breakup_Estimate)) +
-  geom_jitter(aes(color = size_group_jenks), width = 0.2) +
-  labs(title = "Breakup Date by Lake Size Group (Jenks)",
-       x = "Size Group",
-       y = "Breakup Date") +
-  theme_minimal() +
-  scale_color_brewer(palette = "Set1")
-
-#again for quintiles 
-# Boxplot
-ggplot(breakup_dates_with_area, aes(x = size_group_quantiles, y = Breakup_Estimate)) +
-  geom_boxplot() +
-  labs(title = "Breakup Date by Lake Size Group (Quintiles)",
-       x = "Size Group",
-       y = "Breakup Date") +
-  theme_minimal()
 
 
-# Scatterplot with jitter to avoid overplotting
-ggplot(breakup_dates_with_area, aes(x = size_group_quantiles, y = Breakup_Estimate)) +
-  geom_jitter(aes(color = size_group_quantiles), width = 0.2) +
-  labs(title = "Breakup Date by Lake Size Group (Quintiles)",
-       x = "Size Group",
-       y = "Breakup Date") +
-  theme_minimal() +
-  scale_color_brewer(palette = "Set1")
 
+## Statistical Tests ------------------------------------------------------------
 
-## Statistical Test ------------------------------------------------------------
-#ANOVA assumptions test
-
-
-# ANOVA to test for differences in average breakup dates across size groups
-anova_results <- aov(as.numeric(Breakup_Estimate) ~ size_group_quantiles, data = breakup_dates_with_area)
+###BINNED ---------------------------------
+#### ANOVA ------------------------------------------------------------
+#to test for differences in average breakup dates across size groups
+anova_results <- aov(as.numeric(Breakup_Estimate) ~ size_group, data = size_analysis_df)
 anova_summary <- summary(anova_results)
 
 # Print the summary of ANOVA results
@@ -532,25 +640,56 @@ print(anova_summary)
 # Then get the residuals
 residuals <- residuals(anova_results)
 
+# Q-Q plot to check normality of residuals
+qqnorm(residuals)
+qqline(residuals, col = 'steelblue')
+
 # Perform the Shapiro-Wilk test on the residuals
 shapiro.test(residuals)
 
 
 kruskal.test(Breakup_Estimate ~ size_group_jenks, data = breakup_dates_with_area)
 
+####Mann-Whitney U test, non parametric t-test ------------------------------------
+# converting dates to Julian days:
+size_analysis_df$Breakup_Estimate_numeric <- as.numeric(format(size_analysis_df$Breakup_Estimate, "%j"))
+
+# Perform the Mann-Whitney U test
+mann_whitney_test <- wilcox.test(Breakup_Estimate_numeric ~ size_group, data = size_analysis_df)
+
+# Print the test result
+print(mann_whitney_test)
 
 
 
+### CONTINUOUS ---------------------------------
+#### linear regression ----------------------------------
+lm_model <- lm(Breakup_Estimate_numeric ~ measuredArea, data = size_analysis_df)
 
-#what are the ranges of values in each size category?
-# Calculate min and max totalArea for each Jenks group
-jenks_area_ranges <- breakup_dates_with_area %>%
-  group_by(size_group_jenks) %>%
-  summarise(
-    Min_Area = min(totalArea, na.rm = TRUE),
-    Max_Area = max(totalArea, na.rm = TRUE)
-  )
+# Summary of the regression model to view coefficients and statistics
+summary(lm_model)
 
-# View the area ranges for each Jenks group
-print(jenks_area_ranges)
+ggplot(size_analysis_df, aes(x = Breakup_Estimate_numeric, y = measuredArea)) +
+  geom_point(aes(color = size_group), alpha = 0.5) +  # Scatter plot points
+  geom_smooth(method = "lm", se = FALSE, color = "black") +  # Regression line
+  scale_x_continuous(name = "Breakup Date (Numeric)") +
+  scale_y_continuous(name = "Measured Area (size of lake)", labels = scales::comma) +
+  labs(title = "Regression of Breakup Date on Lake Size") +
+  theme_minimal() +
+  theme(legend.position = "none") +  # Hide legend if not needed 
+  ylim(0, 10000000)
+
+####random forest regression---------------------------------
+install.packages("randomForest")
+library(randomForest)
+rf_model <- randomForest(Breakup_Estimate_numeric ~ measuredArea, data = size_analysis_df)
+print(rf_model)
+
+
+#### MARS (multivariate adaptive regression splines)
+install.packages("earth")
+library(earth)
+mars_model <- earth(Breakup_Estimate_numeric ~ measuredArea, data = size_analysis_df)
+print(mars_model)
+
 
